@@ -22,11 +22,22 @@ const { isString } = require('../../util/is');
 const { outputQuery, unwrapRaw } = require('../../formatter/wrappingFormatter');
 const { compileCallback } = require('../../formatter/formatterUtils');
 
+import type OracleDBInner from 'oracledb'
+import type { ConnectionAttributes, Connection } from 'oracledb'
+
+export type OracleDb = typeof OracleDBInner & {
+  Connection: OracleDBInner.Connection & {
+    commitAsync(): Promise<any>
+    executeAsync(sql: any, bindParams: any, options: any): Promise<any>
+    isTransaction: boolean
+  }
+}
+
 class Client_Oracledb extends Client_Oracle {
-  constructor(config) {
+  constructor(config: any) {
     super(config);
     if (this.driver) {
-      process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || 1;
+      process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '1';
       process.env.UV_THREADPOOL_SIZE =
         parseInt(process.env.UV_THREADPOOL_SIZE) + this.driver.poolMax;
     }
@@ -34,13 +45,13 @@ class Client_Oracledb extends Client_Oracle {
 
   _driver() {
     const client = this;
-    const oracledb = require('oracledb');
+    const oracledb: OracleDb = require('oracledb');
     client.fetchAsString = [];
     if (this.config.fetchAsString && Array.isArray(this.config.fetchAsString)) {
-      this.config.fetchAsString.forEach(function (type) {
-        if (!isString(type)) return;
-        type = type.toUpperCase();
-        if (oracledb[type]) {
+      this.config.fetchAsString.forEach((type: string | unknown) => {
+        if (typeof type !== 'string') return;
+        const cleanType = type.toUpperCase();
+        if (cleanType in oracledb) {
           if (
             type !== 'NUMBER' &&
             type !== 'DATE' &&
@@ -51,14 +62,14 @@ class Client_Oracledb extends Client_Oracle {
               'Only "date", "number", "clob" and "buffer" are supported for fetchAsString'
             );
           }
-          client.fetchAsString.push(oracledb[type]);
+          client.fetchAsString.push(oracledb[cleanType as keyof OracleDb]);
         }
       });
     }
     return oracledb;
   }
 
-  queryCompiler(builder, formatter) {
+  queryCompiler(builder: any, formatter: any) {
     return new QueryCompiler(this, builder, formatter);
   }
 
@@ -78,7 +89,7 @@ class Client_Oracledb extends Client_Oracle {
     return new ViewCompiler(this, ...arguments);
   }
 
-  formatter(builder) {
+  formatter(builder: any) {
     return new Formatter(this, builder);
   }
 
@@ -86,8 +97,8 @@ class Client_Oracledb extends Client_Oracle {
     return new Transaction(this, ...arguments);
   }
 
-  prepBindings(bindings) {
-    return map(bindings, (value) => {
+  prepBindings(bindings: any) {
+    return map(bindings, (value: any) => {
       if (value instanceof BlobHelper && this.driver) {
         return { type: this.driver.BLOB, dir: this.driver.BIND_OUT };
         // Returning helper always use ROWID as string
@@ -102,7 +113,7 @@ class Client_Oracledb extends Client_Oracle {
 
   // Checks whether a value is a function... if it is, we compile it
   // otherwise we check whether it's a raw
-  parameter(value, builder, formatter) {
+  parameter(value: any, builder: any, formatter: any) {
     if (typeof value === 'function') {
       return outputQuery(
         compileCallback(value, undefined, this, formatter),
@@ -120,15 +131,16 @@ class Client_Oracledb extends Client_Oracle {
   // connection needs to be added to the pool.
   acquireRawConnection() {
     const client = this;
+    const driver = client.driver as OracleDb
     const asyncConnection = new Promise(function (resolver, rejecter) {
       // If external authentication don't have to worry about username/password and
       // if not need to set the username and password
-      const oracleDbConfig = client.connectionSettings.externalAuth
+      const oracleDbConfig: ConnectionAttributes = client.connectionSettings.externalAuth
         ? { externalAuth: client.connectionSettings.externalAuth }
         : {
-            user: client.connectionSettings.user,
-            password: client.connectionSettings.password,
-          };
+          user: client.connectionSettings.user,
+          password: client.connectionSettings.password,
+        };
 
       // In the case of external authentication connection string will be given
       oracleDbConfig.connectString = resolveConnectString(
@@ -136,7 +148,7 @@ class Client_Oracledb extends Client_Oracle {
       );
 
       if (client.connectionSettings.prefetchRowCount) {
-        oracleDbConfig.prefetchRows =
+        client.prefetchRows =
           client.connectionSettings.prefetchRowCount;
       }
 
@@ -144,9 +156,9 @@ class Client_Oracledb extends Client_Oracle {
         oracleDbConfig.stmtCacheSize = client.connectionSettings.stmtCacheSize;
       }
 
-      client.driver.fetchAsString = client.fetchAsString;
+      driver.fetchAsString = client.fetchAsString;
 
-      client.driver.getConnection(oracleDbConfig, function (err, connection) {
+      driver.getConnection(oracleDbConfig, function (err, connection) {
         if (err) {
           return rejecter(err);
         }
@@ -160,16 +172,18 @@ class Client_Oracledb extends Client_Oracle {
 
   // Used to explicitly close a connection, called internally by the pool
   // when a connection times out or the pool is shutdown.
-  destroyRawConnection(connection) {
+  destroyRawConnection(connection: Connection) {
     return connection.release();
   }
 
   // Runs the query on the specified connection, providing the bindings
   // and any other necessary prep work.
-  _query(connection, obj) {
+  _query(connection: OracleDb['Connection'], obj: any) {
     if (!obj.sql) throw new Error('The query is empty');
 
-    const options = { autoCommit: false };
+    connection
+
+    const options: Record<string, any> = { autoCommit: false };
     if (obj.method === 'select') {
       options.resultSet = true;
     }
@@ -193,9 +207,9 @@ class Client_Oracledb extends Client_Oracle {
         if (obj.method === 'update') {
           const modifiedRowsCount = obj.rowsAffected.length || obj.rowsAffected;
           const updatedObjOutBinding = [];
-          const updatedOutBinds = [];
-          const updateOutBinds = (i) =>
-            function (value, index) {
+          const updatedOutBinds: any[] = [];
+          const updateOutBinds = (i: number) =>
+            function (value: any, index: number) {
               const OutBindsOffset = index * modifiedRowsCount;
               updatedOutBinds.push(outBinds[i + OutBindsOffset]);
             };
@@ -214,7 +228,7 @@ class Client_Oracledb extends Client_Oracle {
           }
           return obj;
         }
-        const rowIds = [];
+        const rowIds: any[] = [];
         let offset = 0;
 
         for (let line = 0; line < obj.outBinding.length; line++) {
@@ -227,14 +241,14 @@ class Client_Oracledb extends Client_Oracle {
           for (let index = 0; index < ret.length; index++) {
             const out = ret[index];
 
-            await new Promise(function (bindResolver, bindRejecter) {
+            await new Promise<void>(function (bindResolver, bindRejecter) {
               if (out instanceof BlobHelper) {
                 const blob = outBinds[index + offset];
                 if (out.returning) {
                   obj.response[line] = obj.response[line] || {};
                   obj.response[line][out.columnName] = out.value;
                 }
-                blob.on('error', function (err) {
+                blob.on('error', function (err: Error) {
                   bindRejecter(err);
                 });
                 blob.on('finish', function () {
@@ -270,7 +284,7 @@ class Client_Oracledb extends Client_Oracle {
   }
 
   // Process the response as returned from the query.
-  processResponse(obj, runner) {
+  processResponse(obj: any, runner: any) {
     const { response } = obj;
     if (obj.output) {
       return obj.output.call(runner, response);
@@ -298,14 +312,14 @@ class Client_Oracledb extends Client_Oracle {
     }
   }
 
-  processPassedConnection(connection) {
+  processPassedConnection(connection: any) {
     monkeyPatchConnection(connection, this);
   }
 }
 
 Client_Oracledb.prototype.driverName = 'oracledb';
 
-function resolveConnectString(connectionSettings) {
+function resolveConnectString(connectionSettings: any) {
   if (connectionSettings.connectString) {
     return connectionSettings.connectString;
   }
