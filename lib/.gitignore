@@ -8,3 +8,4 @@
 
 # Do not include .js files from .ts files
 dialects/index.js
+dialects/sqlite3/utils.js
